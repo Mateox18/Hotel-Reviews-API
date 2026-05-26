@@ -1,7 +1,10 @@
 import os
 from datetime import date, datetime, time, timezone
-from fastapi import FastAPI, Body, HTTPException
+from typing import Optional
+
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
 from pymongo import MongoClient
 from dotenv import load_dotenv
 
@@ -26,6 +29,32 @@ if MONGO_DB_NAME is None:
 client = MongoClient(MONGO_URI)
 db = client[MONGO_DB_NAME]
 collection = db["resenas"]
+
+
+class CrearResena(BaseModel):
+    idReserva: int
+    idHotel: int
+    idCliente: int
+    calificacion: int = Field(ge=1, le=5)
+    comentario: str
+    destacada: bool = False
+
+
+class EditarResena(BaseModel):
+    calificacion: Optional[int] = Field(default=None, ge=1, le=5)
+    comentario: Optional[str] = None
+    destacada: Optional[bool] = None
+    estado: Optional[str] = None
+
+
+class RespuestaAdmin(BaseModel):
+    idAdmin: int
+    texto: str
+
+
+class MarcarUtilidad(BaseModel):
+    idCliente: int
+
 
 @app.get("/")
 def inicio():
@@ -216,29 +245,8 @@ def reserva(id_reserva: int):
     }
 #Requerimientos funcionales
 @app.post("/resenas")
-def crear_resena(resena: dict = Body(...)):
-    campos_obligatorios = [
-        "idReserva",
-        "idHotel",
-        "idCliente",
-        "calificacion",
-        "comentario"
-    ]
-
-    for campo in campos_obligatorios:
-        if campo not in resena:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Falta el campo obligatorio: {campo}"
-            )
-
-    if resena["calificacion"] < 1 or resena["calificacion"] > 5:
-        raise HTTPException(
-            status_code=400,
-            detail="La calificacion debe estar entre 1 y 5"
-        )
-
-    if collection.find_one({"idReserva": resena["idReserva"]}) is not None:
+def crear_resena(resena: CrearResena):
+    if collection.find_one({"idReserva": resena.idReserva}) is not None:
         raise HTTPException(
             status_code=400,
             detail="Ya existe una resena con ese idReserva"
@@ -246,15 +254,15 @@ def crear_resena(resena: dict = Body(...)):
     fecha_actual = datetime.now(timezone.utc)
 
     nueva_resena = {
-        "idReserva": resena["idReserva"],
-        "idHotel": resena["idHotel"],
-        "idCliente": resena["idCliente"],
-        "calificacion": resena["calificacion"],
-        "comentario": resena["comentario"],
+        "idReserva": resena.idReserva,
+        "idHotel": resena.idHotel,
+        "idCliente": resena.idCliente,
+        "calificacion": resena.calificacion,
+        "comentario": resena.comentario,
         "fechaCreacion": fecha_actual,
         "fechaActualizacion": fecha_actual,
         "estado": "publicada",
-        "destacada": resena.get("destacada", False),
+        "destacada": resena.destacada,
         "utilidad": {
             "cantidad": 0,
             "usuarios": []
@@ -270,27 +278,14 @@ def crear_resena(resena: dict = Body(...)):
     }
 
 @app.patch("/resenas/{id_reserva}")
-def editar_resena(id_reserva: int, datos: dict = Body(...)):
-    campos_permitidos = ["calificacion", "comentario", "destacada", "estado"]
-
-    cambios = {}
-
-    for campo in campos_permitidos:
-        if campo in datos:
-            cambios[campo] = datos[campo]
+def editar_resena(id_reserva: int, datos: EditarResena):
+    cambios = datos.model_dump(exclude_unset=True)
 
     if len(cambios) == 0:
         raise HTTPException(
             status_code=400,
             detail="No se enviaron campos validos para actualizar"
         )
-
-    if "calificacion" in cambios:
-        if cambios["calificacion"] < 1 or cambios["calificacion"] > 5:
-            raise HTTPException(
-                status_code=400,
-                detail="La calificacion debe estar entre 1 y 5"
-            )
 
     cambios["fechaActualizacion"] = datetime.now(timezone.utc)
 
@@ -308,7 +303,10 @@ def editar_resena(id_reserva: int, datos: dict = Body(...)):
     return {
         "mensaje": "Resena actualizada correctamente",
         "idReserva": id_reserva,
-        "camposActualizados": list(cambios.keys())
+        "camposActualizados": [
+            campo for campo in cambios.keys()
+            if campo != "fechaActualizacion"
+        ]
     }
 
 @app.delete("/resenas/{id_reserva}")
@@ -326,22 +324,10 @@ def eliminar_resena(id_reserva: int):
         "idReserva": id_reserva
     }
 @app.patch("/resenas/{id_reserva}/responder_admin")
-def responder_admin(id_reserva: int, datos: dict = Body(...)):
-    if "idAdmin" not in datos:
-        raise HTTPException(
-            status_code=400,
-            detail="Falta el campo obligatorio: idAdmin"
-        )
-
-    if "texto" not in datos:
-        raise HTTPException(
-            status_code=400,
-            detail="Falta el campo obligatorio: texto"
-        )
-
+def responder_admin(id_reserva: int, datos: RespuestaAdmin):
     respuesta_admin = {
-        "idAdmin": datos["idAdmin"],
-        "texto": datos["texto"],
+        "idAdmin": datos.idAdmin,
+        "texto": datos.texto,
         "fechaRespuesta": datetime.now(timezone.utc)
     }
 
@@ -391,14 +377,8 @@ def destacar_admin(id_reserva: int):
     }
 
 @app.patch("/resenas/{id_reserva}/utilidad")
-def marcar_utilidad(id_reserva: int, datos: dict = Body(...)):
-    if "idCliente" not in datos:
-        raise HTTPException(
-            status_code=400,
-            detail="Falta el campo obligatorio: idCliente"
-        )
-
-    id_cliente = datos["idCliente"]
+def marcar_utilidad(id_reserva: int, datos: MarcarUtilidad):
+    id_cliente = datos.idCliente
 
     resultado = collection.update_one(
         {
