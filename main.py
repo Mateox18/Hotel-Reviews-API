@@ -202,7 +202,18 @@ def obtener_resena_por_reserva(id_reserva: int):
     }
 @app.get("/resenas/{id_reserva}")
 def reserva(id_reserva: int):
-    cliente = list(collection.find({"idCliente": id_cliente}, {"_id": 0}))
+    resena = collection.find_one({"idReserva": id_reserva}, {"_id": 0})
+
+    if resena is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No se encontro una resena con ese idReserva"
+        )
+
+    return {
+        "idReserva": id_reserva,
+        "resena": resena
+    }
 #Requerimientos funcionales
 @app.post("/resenas")
 def crear_resena(resena: dict = Body(...)):
@@ -227,6 +238,11 @@ def crear_resena(resena: dict = Body(...)):
             detail="La calificacion debe estar entre 1 y 5"
         )
 
+    if collection.find_one({"idReserva": resena["idReserva"]}) is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="Ya existe una resena con ese idReserva"
+        )
     fecha_actual = datetime.now(timezone.utc)
 
     nueva_resena = {
